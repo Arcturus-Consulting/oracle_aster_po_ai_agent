@@ -30,34 +30,39 @@ HELP_REPLY = (
 )
 
 SYSTEM_PROMPT = """
-You are an Oracle Fusion procurement chatbot router.
+You are a routing assistant for an Oracle Fusion Purchase Order chatbot.
 
-If the user greets you or asks what you can do, answer naturally and briefly.
+Your job is not to answer directly. Your job is to decide whether the user request can be handled by the available PO schedule search tool.
 
-Your available Oracle tool is search_po_schedules.
-Call it when the user asks for:
+Supported requests:
 - overdue open purchase order schedules
-- overdue schedules for a supplier
-- schedules overdue by more than N days
-- suppliers with the most overdue schedules
+- overdue POs for a supplier
 - overdue POs above an amount
-- schedules due today, near due, or due this week
-- partially received overdue schedules
+- overdue POs late by more than N days
+- partially received overdue POs
+- schedules due today
+- schedules due this week
+- schedules near due
+- suppliers with the most overdue schedules
 
-Do not call the tool for unrelated requests.
-Do not invent Oracle data. Oracle facts must come from the tool result.
+If the user asks normal greeting/help, answer normally.
+If the user asks anything outside these supported features, do not call a tool.
+Politely ask the user to rephrase with one of the supported procurement queries.
 
-Routing rules:
-- "which suppliers have the most overdue schedules" means group_by_supplier=true.
-- "overdue by more than 30 days" means min_late_days=30.
-- "above 10000" or "more than 10000" means min_amount=10000.
-- "partially received" means partially_received=true.
-- "due today" means due_window="today" and overdue=false.
-- "near due" means due_window="near_due" and overdue=false.
-- "due this week" means due_window="this_week" and overdue=false.
-- supplier names should be passed in supplier.
+When calling the tool:
+- Extract supplier names exactly.
+- For "for Amazon", use supplier = "Amazon".
+- For "supplier Midtown Computer Supplies", use supplier = "Midtown Computer Supplies".
+- For "more than 30 days late", use min_late_days = 30.
+- For "above 10000", use min_amount = 10000.
+- For "top suppliers" or "which suppliers have most overdue", use group_by_supplier = true.
+- For "partially received", use partially_received = true.
+- For "due today", set overdue = false and due_window = "today".
+- For "due this week", set overdue = false and due_window = "this_week".
+- For "near due", set overdue = false and due_window = "near_due".
 
-After the tool returns, summarize the count and tell the user the result is shown on the right.
+Never invent unsupported filters.
+Never return all overdue schedules if the user clearly asked for a supplier-specific result.
 """
 
 FUNCTION_DECLARATIONS = [
@@ -74,11 +79,11 @@ FUNCTION_DECLARATIONS = [
                 "supplier": {"type": "string"},
                 "overdue": {"type": "boolean"},
                 "min_late_days": {"type": "integer"},
+                "min_amount": {"type": "number"},
                 "due_window": {
                     "type": "string",
-                    "enum": ["today", "near_due", "this_week"],
+                    "enum": ["today", "near_due", "this_week"]
                 },
-                "min_amount": {"type": "number"},
                 "partially_received": {"type": "boolean"},
                 "group_by_supplier": {"type": "boolean"},
                 "page": {"type": "integer"},
@@ -87,8 +92,6 @@ FUNCTION_DECLARATIONS = [
                     "type": "string",
                     "enum": ["asc", "desc"],
                 },
-                "limit": {"type": "integer"},
-                "max_pages": {"type": "integer"},
             },
         },
     }
@@ -150,27 +153,34 @@ def _fallback_args_from_text(text: str) -> dict[str, Any]:
         "overdue": True,
     }
 
-    supplier_match = re.search(
-        r"(?:for supplier|supplier|for|from)\s+([a-zA-Z0-9&.,' -]+)",
+    quoted_supplier = re.search(
+        r'(?:supplier|vendor|for|from)\s+["“]([^"”]+)["”]',
         text,
         flags=re.IGNORECASE,
     )
+
+    supplier_match = quoted_supplier or re.search(
+        r"(?:supplier|vendor|for|from)\s+([a-zA-Z0-9&.,' -]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+
     if supplier_match:
         supplier = supplier_match.group(1).strip()
         supplier = re.split(
-            r"\b(overdue|above|more than|greater than|due|partially|received|open)\b",
+            r"\b(overdue|above|more than|greater than|due|partially|received|open|with|where|by)\b",
             supplier,
             flags=re.IGNORECASE,
-        )[0].strip(" .,")
-        if supplier and supplier.lower() not in {"po", "pos", "purchase order", "purchase orders"}:
+        )[0].strip(" .,\"'")
+        if supplier and supplier.lower() not in {"po", "pos", "purchase order", "purchase orders", "all"}:
             args["supplier"] = supplier
 
-    late_match = re.search(r"(?:more than|over)\s+(\d+)\s+days?", lowered)
+    late_match = re.search(r"(?:more than|over|late by)\s+(\d+)\s+days?", lowered)
     if late_match:
         args["min_late_days"] = int(late_match.group(1))
 
     amount_match = re.search(r"(?:above|more than|greater than|over)\s+([\d,]+(?:\.\d+)?)", lowered)
-    if amount_match and "day" not in lowered[amount_match.start():amount_match.end() + 10]:
+    if amount_match and "day" not in lowered[amount_match.start():amount_match.end() + 12]:
         args["min_amount"] = float(amount_match.group(1).replace(",", ""))
 
     if "partially received" in lowered or "partial received" in lowered:
@@ -328,10 +338,14 @@ async def run_chat(messages: list[dict[str, str]], oracle_config: dict[str, Any]
             return _tool_result_response(result, "fallback-after-no-tool-call", tool_calls)
 
         return {
-            "reply": response.text or UNAVAILABLE_REPLY,
+            "reply": (
+                "I could not map that request to the current procurement tools. "
+                "Please ask using details like supplier name, overdue days, amount, "
+                "due date window, or partially received schedules."
+            ),
             "table": [],
             "toolCalls": [],
-            "router": "gemini",
+            "router": "gemini-unsupported",
         }
 
     tool_calls = []
