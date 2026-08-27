@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oracle PO Chatbot</title>
+  <style>
+    :root{
+      --ink:#17211f; --muted:#5d6966; --line:#d8dfdc; --surface:#ffffff;
+      --soft:#f4f7f6; --accent:#006b73; --accent-2:#a23e2a; --good:#3d7c44;
+      --dark:#2d2926; font-family: Inter, "Segoe UI", Arial, sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--soft);color:var(--ink)}
+    header{height:64px;background:var(--dark);color:white;display:flex;align-items:center;padding:0 28px;gap:18px}
+    .brand{font-size:34px;font-weight:800}
+    .header-title{font-size:16px;font-weight:600}
+    .status{margin-left:auto;font-size:13px;color:#d8f1e9;display:flex;gap:8px;align-items:center}
+    .dot{width:9px;height:9px;border-radius:50%;background:#d7a229}
+    .dot.ok{background:#73bd72}
+    .logout{
+  display:none;
+  align-items:center;
+  justify-content:center;
+  height:34px;
+  min-height:34px;
+  padding:0 14px;
+  background:rgba(255,255,255,.06);
+  color:white;
+  border:1px solid rgba(255,255,255,.45);
+  border-radius:6px;
+  font-size:13px;
+  font-weight:700;
+  line-height:1;
+}
+
+.logout:hover{
+  background:rgba(255,255,255,.12);
+  border-color:rgba(255,255,255,.7);
+}
+    .view{display:none !important}
+    .view.active{display:block !important}
+    .view.active.auth-shell{display:grid !important}
+    .view.active#appView{display:grid !important}
+    .auth-shell{min-height:calc(100vh - 64px);place-items:center;padding:32px;background:linear-gradient(180deg,#f7faf9 0%,#edf3f1 100%)}
+    .auth-card{width:min(460px,100%);background:white;border:1px solid var(--line);border-radius:8px;padding:28px;box-shadow:0 20px 50px rgba(24,34,31,.08)}
+    h1,h2{margin:0 0 8px}
+    h1{font-size:26px} h2{font-size:24px}
+    .sub{color:var(--muted);font-size:14px;line-height:1.45;margin:0 0 22px}
+    label{display:block;font-size:13px;font-weight:700;margin:14px 0 6px}
+    input,select,textarea{width:100%;border:1px solid #aab4b0;border-radius:7px;padding:11px 12px;font:inherit;background:white;color:var(--ink)}
+    input:focus,select:focus,textarea:focus{outline:0;border-color:#263331;box-shadow:0 0 0 2px rgba(38,51,49,.12)}
+    .form-row{display:flex;gap:10px;align-items:center;margin-top:18px;flex-wrap:wrap}
+    button{border:1px solid #263331;background:#263331;color:white;border-radius:8px;padding:0 14px;font-weight:700;cursor:pointer;min-height:42px}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    button.secondary{background:white;color:#263331}
+    .switch-link{border:0;background:transparent;color:var(--accent);padding:0;min-height:auto;font-weight:750}
+    .google-btn{width:100%;background:white;color:#263331;border-color:#aab4b0;margin-top:12px}
+    .divider{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;margin:18px 0}
+    .divider:before,.divider:after{content:"";height:1px;background:var(--line);flex:1}
+    .otp-box{display:none;margin-top:14px;padding:14px;border:1px solid #cbd8d4;background:#f8fbfa;border-radius:8px}
+    .otp-box.show{display:block}
+    .error{display:none;margin-top:14px;padding:11px 12px;border:1px solid #e4b5aa;background:#fff3f0;color:#8e2f1b;border-radius:7px;font-size:13px;line-height:1.4}
+    .error.show{display:block}
+    .progress{display:none;height:4px;background:#dce5e2;overflow:hidden;border-radius:999px;margin-top:16px}
+    .progress.show{display:block}
+    .progress span{display:block;width:38%;height:100%;background:var(--accent);border-radius:999px;animation:loading 1.1s infinite ease-in-out}
+    @keyframes loading{0%{transform:translateX(-110%)}100%{transform:translateX(280%)}}
+    main{display:grid;grid-template-columns:minmax(320px,420px) 1fr;height:calc(100vh - 64px);overflow:hidden}
+    .chat{background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;height:calc(100vh - 64px);overflow:hidden}
+    .chat-top{padding:24px 24px 14px;border-bottom:1px solid var(--line)}
+    .messages{flex:1;overflow:auto;padding:20px 18px;display:flex;flex-direction:column;gap:14px}
+    .msg{max-width:92%;padding:12px 14px;border-radius:8px;line-height:1.42;font-size:14px;white-space:pre-wrap}
+    .msg.user{align-self:flex-end;background:#e1f1ef}
+    .msg.assistant{align-self:flex-start;background:#f1f3f2;border:1px solid var(--line)}
+    .composer{padding:12px 16px;border-top:1px solid var(--line);display:flex;align-items:flex-end;gap:8px;background:white}
+    .input-shell{flex:1;min-height:42px;max-height:96px;border:1px solid #aab4b0;border-radius:8px;background:white;display:flex;align-items:center;padding:6px 8px}
+    .input-shell:focus-within{border-color:#263331;box-shadow:0 0 0 2px rgba(38,51,49,.12)}
+    textarea{min-height:28px;max-height:78px;resize:none;border:0;outline:0;padding:4px 6px;line-height:1.35;overflow:auto}
+    .work{padding:24px;height:calc(100vh - 64px);overflow:hidden;display:flex;flex-direction:column}
+    .work-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:14px}
+    .summary{color:var(--muted);font-size:14px}
+    .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+    .toolbar select{min-height:40px;padding:0 10px}
+    .fetch-status{display:none;margin-bottom:12px;color:var(--muted);font-size:13px}
+    .fetch-status.show{display:block}
+    .table-wrap{background:white;border:1px solid var(--line);border-radius:8px;overflow:auto;flex:1;min-height:0}
+    table{width:100%;border-collapse:collapse;min-width:980px}
+    th,td{padding:12px 14px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:14px}
+    th{background:#f8faf9;font-weight:750;position:sticky;top:0;z-index:1}
+    a.order{color:#006c8f;font-weight:700;text-decoration:none}
+    .pill{display:inline-flex;align-items:center;border-radius:999px;padding:3px 9px;font-size:12px;background:#d9efc4;color:#183a19}
+    .late{color:var(--accent-2);font-weight:750}
+    .empty{padding:44px;text-align:center;color:var(--muted);background:white;border:1px dashed var(--line);border-radius:8px}
+    .mail{background:var(--accent);border-color:var(--accent);min-height:34px}
+    .sort-btn{border:0;background:transparent;color:#263331;min-height:auto;padding:0 4px;font-weight:800;font-size:15px;vertical-align:middle}
+    .pager{display:flex;justify-content:center;align-items:center;gap:8px;padding:14px;background:white}
+    .pager button{background:white;color:#263331;min-height:34px}
+    .pager button.active{background:#263331;color:white}
+    .no-mail{color:#66716e;font-size:12px;white-space:nowrap}
+    @media(max-width:900px){
+      main{grid-template-columns:1fr;height:auto;overflow:auto}
+      .chat{height:460px;border-right:0;border-bottom:1px solid var(--line)}
+      .work{height:calc(100vh - 64px)}
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">VISION</div>
+    <div class="header-title">Oracle PO Chatbot</div>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">Starting</span></div>
+    <button class="logout" id="logoutBtn" type="button">Logout</button>
+  </header>
+
+  <section id="authView" class="view auth-shell">
+    <div class="auth-card">
+      <h1 id="authTitle">Sign In</h1>
+      <p class="sub" id="authSub">Use Firebase login to continue. Oracle credentials are requested separately and are not saved.</p>
+
+      <button id="googleBtn" class="google-btn" type="button">Continue with Google</button>
+      <div class="divider">or</div>
+
+      <form id="authForm">
+        <label for="authEmail">Email</label>
+        <input id="authEmail" type="email" autocomplete="email" required>
+
+        <label for="authPassword">Password</label>
+        <input id="authPassword" type="password" autocomplete="current-password" required>
+
+        <div id="otpBox" class="otp-box">
+          <label for="otpInput">Verification OTP</label>
+          <input id="otpInput" inputmode="numeric" maxlength="6" placeholder="Enter 6-digit OTP">
+          <p class="sub" style="margin:8px 0 0">OTP expires in 1 minute. Check the email inbox you entered above.</p>
+        </div>
+
+        <div class="form-row">
+          <button id="authSubmit" type="submit">Sign In</button>
+          <button id="authSwitch" class="switch-link" type="button">Create account</button>
+        </div>
+
+        <div class="progress" id="authProgress"><span></span></div>
+        <div class="error" id="authError"></div>
+      </form>
+    </div>
+  </section>
+
+  <section id="oracleView" class="view auth-shell">
+    <div class="auth-card">
+      <h1>Connect Oracle Fusion</h1>
+      <p class="sub">Enter Oracle credentials for this session only. They are verified before the dashboard opens and expire after 30 minutes.</p>
+
+      <form id="oracleForm">
+        <label for="oracleBaseUrl">Oracle Base URL</label>
+        <input id="oracleBaseUrl" type="url" placeholder="https://your-pod.ds-fa.oraclepdemos.com" required>
+
+        <label for="oracleUsername">Oracle Username</label>
+        <input id="oracleUsername" autocomplete="username" required>
+
+        <label for="oraclePassword">Oracle Password</label>
+        <input id="oraclePassword" type="password" autocomplete="current-password" required>
+
+        <label for="oracleRestVersion">REST Version</label>
+        <input id="oracleRestVersion" value="11.13.18.05" required>
+
+        <div class="form-row">
+          <button id="oracleSubmit" type="submit">Verify & Continue</button>
+          <button id="oracleBack" class="secondary" type="button">Back</button>
+        </div>
+
+        <div class="progress" id="oracleProgress"><span></span></div>
+        <div class="error" id="oracleError"></div>
+      </form>
+    </div>
+  </section>
+
+  <main id="appView" class="view">
+    <section class="chat">
+      <div class="chat-top">
+        <h1>Procurement Assistant</h1>
+        <p class="sub">Ask for overdue open purchase order schedules. Attachments are intentionally not supported in this project.</p>
+      </div>
+
+      <div class="messages" id="messages">
+        <div class="msg assistant">Try: list me all items that should have been delivered by today but are still open.</div>
+      </div>
+
+      <form class="composer" id="composer">
+        <div class="input-shell">
+          <textarea id="prompt" rows="1" placeholder="Ask about overdue open PO schedules"></textarea>
+        </div>
+        <button id="send" type="submit">Send</button>
+      </form>
+    </section>
+
+    <section class="work">
+      <div class="work-head">
+        <div>
+          <h2>Overdue Open Schedules</h2>
+          <div class="summary" id="summary">No Oracle result loaded yet.</div>
+        </div>
+        <div class="toolbar">
+          <select id="destinationFilter">
+            <option value="">All destination types</option>
+            <option value="expense">Expense</option>
+            <option value="inventory">Inventory</option>
+          </select>
+          <button class="secondary" id="clear" type="button">Clear</button>
+        </div>
+      </div>
+
+      <div class="fetch-status" id="fetchStatus">Fetching Oracle data...</div>
+      <div class="progress" id="fetchProgress"><span></span></div>
+      <div id="tableArea" class="empty">The Oracle result table will appear here.</div>
+    </section>
+  </main>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+    import {
+      getAuth,
+      GoogleAuthProvider,
+      signInWithPopup,
+      signOut
+    } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+    let firebaseApp = null;
+    let firebaseAuth = null;
+    let googleProvider = null;
+
+    const authView = document.getElementById("authView");
+    const oracleView = document.getElementById("oracleView");
+    const appView = document.getElementById("appView");
+    const logoutBtn = document.getElementById("logoutBtn");
+
+    const authForm = document.getElementById("authForm");
+    const authTitle = document.getElementById("authTitle");
+    const authSub = document.getElementById("authSub");
+    const authEmail = document.getElementById("authEmail");
+    const authPassword = document.getElementById("authPassword");
+    const authSubmit = document.getElementById("authSubmit");
+    const authSwitch = document.getElementById("authSwitch");
+    const authError = document.getElementById("authError");
+    const authProgress = document.getElementById("authProgress");
+    const googleBtn = document.getElementById("googleBtn");
+    const otpBox = document.getElementById("otpBox");
+    const otpInput = document.getElementById("otpInput");
+
+    const oracleForm = document.getElementById("oracleForm");
+    const oracleBaseUrl = document.getElementById("oracleBaseUrl");
+    const oracleUsername = document.getElementById("oracleUsername");
+    const oraclePassword = document.getElementById("oraclePassword");
+    const oracleRestVersion = document.getElementById("oracleRestVersion");
+    const oracleSubmit = document.getElementById("oracleSubmit");
+    const oracleBack = document.getElementById("oracleBack");
+    const oracleError = document.getElementById("oracleError");
+    const oracleProgress = document.getElementById("oracleProgress");
+
+    const messagesEl = document.getElementById("messages");
+    const form = document.getElementById("composer");
+    const promptEl = document.getElementById("prompt");
+    const sendBtn = document.getElementById("send");
+    const tableArea = document.getElementById("tableArea");
+    const summaryEl = document.getElementById("summary");
+    const statusEl = document.getElementById("status");
+    const dotEl = document.getElementById("dot");
+    const clearBtn = document.getElementById("clear");
+    const destinationFilter = document.getElementById("destinationFilter");
+    const fetchProgress = document.getElementById("fetchProgress");
+    const fetchStatus = document.getElementById("fetchStatus");
+
+    const history = [];
+    let latestRows = [];
+    let currentPage = 1;
+    let totalPages = 1;
+    let pageSize = 20;
+    let sortOrder = "desc";
+    let destinationType = "";
+    let authMode = "login";
+    let signupOtpRequested = false;
+    let appToken = sessionStorage.getItem("firebaseIdToken") || "";
+    let oracleBase = sessionStorage.getItem("oracleBaseUrl") || "";
+
+    function showView(name){
+      authView.classList.remove("active");
+      oracleView.classList.remove("active");
+      appView.classList.remove("active");
+
+      if(name === "auth") authView.classList.add("active");
+      if(name === "oracle") oracleView.classList.add("active");
+      if(name === "app") appView.classList.add("active");
+
+      logoutBtn.style.display = appToken ? "inline-flex" : "none";
+    }
+
+    function setStatus(text, ok=false){
+      statusEl.textContent = text;
+      dotEl.classList.toggle("ok", ok);
+    }
+
+    function showError(el, message){
+      el.textContent = message || "";
+      el.classList.toggle("show", !!message);
+    }
+
+    function setProgress(el, active){
+      el.classList.toggle("show", !!active);
+    }
+
+    function authHeaders(extra = {}){
+      return {...extra, Authorization: `Bearer ${appToken}`};
+    }
+
+    function escapeHtml(value){
+      return String(value ?? "").replace(/[&<>"']/g, ch => ({
+        "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+      }[ch]));
+    }
+
+    function addMessage(role, text){
+      const div = document.createElement("div");
+      div.className = "msg " + role;
+      div.textContent = text;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    async function apiJson(url, options = {}){
+      const res = await fetch(url, options);
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok || data.success === false){
+        throw new Error(data.detail || data.message || "Request failed.");
+      }
+      return data;
+    }
+
+    async function initFirebase(){
+      const data = await apiJson("/api/firebase-config", {cache:"no-store"});
+      firebaseApp = initializeApp(data.config);
+      firebaseAuth = getAuth(firebaseApp);
+      googleProvider = new GoogleAuthProvider();
+    }
+
+    async function saveTokenAndContinue(idToken){
+      appToken = idToken;
+      sessionStorage.setItem("firebaseIdToken", appToken);
+
+      const session = await apiJson("/api/session", {headers: authHeaders()});
+      if(session.oracleConnected){
+        setStatus("Oracle connected", true);
+        showView("app");
+      }else{
+        setStatus("Connect Oracle");
+        showView("oracle");
+      }
+    }
+
+    async function boot(){
+      setStatus("Loading Firebase");
+      try{
+        await initFirebase();
+      }catch(err){
+        setStatus("Firebase config error");
+        showError(authError, err.message);
+        showView("auth");
+        return;
+      }
+
+      if(!appToken){
+        setStatus("Sign in required");
+        showView("auth");
+        return;
+      }
+
+      try{
+        await saveTokenAndContinue(appToken);
+      }catch(err){
+        sessionStorage.removeItem("firebaseIdToken");
+        appToken = "";
+        setStatus("Sign in required");
+        showView("auth");
+      }
+    }
+
+    function updateAuthMode(mode){
+      authMode = mode;
+      signupOtpRequested = false;
+      otpInput.value = "";
+      otpBox.classList.remove("show");
+      showError(authError, "");
+
+      const signup = authMode === "signup";
+      authTitle.textContent = signup ? "Create Account" : "Sign In";
+      authSub.textContent = signup
+        ? "Enter your email and password. We will send an OTP before creating your Firebase account."
+        : "Use Firebase login to continue. Oracle credentials are requested separately and are not saved.";
+      authSubmit.textContent = signup ? "Send OTP" : "Sign In";
+      authSwitch.textContent = signup ? "Already have an account" : "Create account";
+      authPassword.autocomplete = signup ? "new-password" : "current-password";
+    }
+
+    authSwitch.addEventListener("click", () => {
+      updateAuthMode(authMode === "login" ? "signup" : "login");
+    });
+
+    googleBtn.addEventListener("click", async () => {
+      showError(authError, "");
+      setProgress(authProgress, true);
+      googleBtn.disabled = true;
+
+      try{
+        const credential = await signInWithPopup(firebaseAuth, googleProvider);
+        const idToken = await credential.user.getIdToken();
+        await saveTokenAndContinue(idToken);
+      }catch(err){
+        showError(authError, err.message || "Google sign-in failed.");
+      }finally{
+        setProgress(authProgress, false);
+        googleBtn.disabled = false;
+      }
+    });
+
+    authForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      showError(authError, "");
+      setProgress(authProgress, true);
+      authSubmit.disabled = true;
+
+      try{
+        const email = authEmail.value.trim().toLowerCase();
+        const password = authPassword.value;
+
+        if(authMode === "login"){
+          const data = await apiJson("/api/auth/login", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({email, password})
+          });
+          await saveTokenAndContinue(data.idToken);
+          return;
+        }
+
+        if(!signupOtpRequested){
+          await apiJson("/api/auth/request-otp", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({email})
+          });
+
+          signupOtpRequested = true;
+          otpBox.classList.add("show");
+          authSubmit.textContent = "Verify OTP & Create";
+          setStatus("OTP sent");
+          showError(authError, "OTP sent. Enter it within 1 minute to create the account.");
+          otpInput.focus();
+          return;
+        }
+
+        const otp = otpInput.value.trim();
+        if(!/^\d{6}$/.test(otp)){
+          throw new Error("Enter the 6-digit OTP.");
+        }
+
+        const data = await apiJson("/api/auth/verify-otp-signup", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({email, password, otp})
+        });
+
+        await saveTokenAndContinue(data.idToken);
+      }catch(err){
+        showError(authError, err.message);
+      }finally{
+        setProgress(authProgress, false);
+        authSubmit.disabled = false;
+      }
+    });
+
+    oracleForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      showError(oracleError, "");
+      setProgress(oracleProgress, true);
+      oracleSubmit.disabled = true;
+      setStatus("Verifying Oracle");
+
+      try{
+        const cleanBaseUrl = oracleBaseUrl.value.trim().replace(/\/$/, "");
+        const data = await apiJson("/api/oracle/connect", {
+          method:"POST",
+          headers: authHeaders({"Content-Type":"application/json"}),
+          body:JSON.stringify({
+            baseUrl: cleanBaseUrl,
+            username: oracleUsername.value.trim(),
+            password: oraclePassword.value,
+            authMode: "basic",
+            restVersion: oracleRestVersion.value.trim() || "11.13.18.05"
+          })
+        });
+
+        oracleBase = cleanBaseUrl;
+        sessionStorage.setItem("oracleBaseUrl", oracleBase);
+        oraclePassword.value = "";
+        setStatus("Oracle connected", true);
+        showView("app");
+        addMessage("assistant", data.message || "Oracle credentials verified. You can ask for overdue open schedules now.");
+      }catch(err){
+        setStatus("Oracle verification failed");
+        showError(oracleError, err.message);
+      }finally{
+        setProgress(oracleProgress, false);
+        oracleSubmit.disabled = false;
+      }
+    });
+
+    oracleBack.addEventListener("click", () => {
+      showView("auth");
+      setStatus("Sign in required");
+    });
+
+    logoutBtn.addEventListener("click", async () => {
+      try{
+        if(appToken){
+          await fetch("/api/auth/logout", {method:"POST", headers: authHeaders()});
+        }
+        if(firebaseAuth){
+          await signOut(firebaseAuth);
+        }
+      }catch(err){}
+
+      sessionStorage.removeItem("firebaseIdToken");
+      sessionStorage.removeItem("oracleBaseUrl");
+      appToken = "";
+      oracleBase = "";
+      setStatus("Signed out");
+      showView("auth");
+    });
+
+    function renderTable(rows, meta){
+      latestRows = rows || [];
+
+      if(meta){
+        currentPage = meta.page || 1;
+        totalPages = meta.totalPages || 1;
+        pageSize = meta.pageSize || 20;
+        sortOrder = meta.sortOrder || sortOrder;
+        destinationType = meta.destinationType || destinationType || "";
+        destinationFilter.value = destinationType;
+      }
+
+      if(!latestRows.length){
+        tableArea.className = "empty";
+        tableArea.textContent = "No overdue open schedules were returned.";
+        summaryEl.textContent = "0 rows";
+        return;
+      }
+
+      tableArea.className = "table-wrap";
+      summaryEl.textContent = `${meta?.overdueOpenCount ?? latestRows.length} overdue open schedule(s). Showing page ${currentPage} of ${totalPages}.`;
+
+      tableArea.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Order</th>
+              <th>Destination Type</th>
+              <th>Due Date <button class="sort-btn" type="button" data-sort-due title="Sort due date">${sortOrder === "asc" ? "↑" : "↓"}</button></th>
+              <th>Late</th>
+              <th>Status</th>
+              <th>Supplier</th>
+              <th>Description</th>
+              <th>Mail</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${latestRows.map((row, index) => `
+              <tr>
+                <td><a class="order" href="${oracleOrderUrl(row)}" target="_blank" rel="noopener">${escapeHtml(row.orderNumber || "")}</a></td>
+                <td>${escapeHtml(row.destinationType || "-")}</td>
+                <td>${escapeHtml(row.dueDate || "-")}</td>
+                <td class="late">${escapeHtml(row.lateDays ?? "-")} day(s)</td>
+                <td><span class="pill">${escapeHtml(row.status || "-")}</span></td>
+                <td>${escapeHtml(row.supplier || "-")}<br><small>${escapeHtml(row.supplierEmail || "")}</small></td>
+                <td>${escapeHtml(row.description || "-")}</td>
+                <td>
+                  ${row.mailAvailable
+                    ? `<button class="mail" type="button" data-index="${index}">Mail</button>`
+                    : `<span class="no-mail">No mail available</span>`
+                  }
+                </td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+        ${renderPager()}
+      `;
+    }
+
+    function renderPager(){
+      if(totalPages <= 1) return "";
+      const pages = [];
+      const start = Math.max(1, currentPage - 2);
+      const end = Math.min(totalPages, currentPage + 2);
+
+      pages.push(`<button type="button" data-page="${currentPage - 1}" ${currentPage <= 1 ? "disabled" : ""}>Prev</button>`);
+      for(let page = start; page <= end; page++){
+        pages.push(`<button type="button" data-page="${page}" class="${page === currentPage ? "active" : ""}">${page}</button>`);
+      }
+      pages.push(`<button type="button" data-page="${currentPage + 1}" ${currentPage >= totalPages ? "disabled" : ""}>Next</button>`);
+      return `<div class="pager">${pages.join("")}</div>`;
+    }
+
+    function oracleOrderUrl(row){
+      if(!oracleBase || !row.poHeaderId) return "#";
+      return `${oracleBase}/fscmUI/redwood/purchase-orders/view?intent=POUser&poHeaderId=${encodeURIComponent(row.poHeaderId)}&selectedTab=schedulesTab`;
+    }
+
+    async function loadPage(page){
+      fetchStatus.textContent = `Fetching page ${page} from Oracle or cache...`;
+      fetchStatus.classList.add("show");
+      setProgress(fetchProgress, true);
+
+      try{
+        const params = new URLSearchParams({
+          page: String(page),
+          page_size: String(pageSize),
+          sort_order: sortOrder,
+          destination_type: destinationType
+        });
+
+        const data = await apiJson(`/api/overdue-schedules?${params.toString()}`, {
+          headers: authHeaders()
+        });
+
+        renderTable(data.rows || [], data);
+      }catch(err){
+        if(String(err.message).toLowerCase().includes("oracle session")){
+          showView("oracle");
+          setStatus("Reconnect Oracle");
+        }
+        addMessage("assistant", err.message || "Could not load that page.");
+      }finally{
+        setProgress(fetchProgress, false);
+        fetchStatus.classList.remove("show");
+      }
+    }
+
+    async function sendMail(row){
+      const data = await apiJson("/api/send-mail", {
+        method:"POST",
+        headers: authHeaders({"Content-Type":"application/json"}),
+        body:JSON.stringify({row})
+      });
+
+      if(data.sent){
+        addMessage("assistant", `Mail sent to ${data.to || data.draft.to}.`);
+      }else if(data.draft && data.draft.mailto){
+        addMessage("assistant", data.reason || "SMTP is not configured. Opening the draft in your mail app.");
+        window.location.href = data.draft.mailto;
+      }else{
+        addMessage("assistant", data.reason || "Mail could not be sent.");
+      }
+    }
+
+    tableArea.addEventListener("click", async event => {
+      const sortButton = event.target.closest("[data-sort-due]");
+      if(sortButton){
+        sortOrder = sortOrder === "asc" ? "desc" : "asc";
+        await loadPage(1);
+        return;
+      }
+
+      const pageButton = event.target.closest(".pager button[data-page]");
+      if(pageButton){
+        const page = Number(pageButton.dataset.page);
+        if(!page || page === currentPage || page < 1 || page > totalPages) return;
+        await loadPage(page);
+        return;
+      }
+
+      const mailButton = event.target.closest("button.mail");
+      if(mailButton){
+        const row = latestRows[Number(mailButton.dataset.index)];
+        if(row) sendMail(row).catch(err => addMessage("assistant", err.message));
+      }
+    });
+
+    destinationFilter.addEventListener("change", async () => {
+      destinationType = destinationFilter.value;
+      await loadPage(1);
+    });
+
+    function autoResizePrompt(){
+      promptEl.style.height = "auto";
+      promptEl.style.height = Math.min(promptEl.scrollHeight, 78) + "px";
+    }
+
+    promptEl.addEventListener("input", autoResizePrompt);
+
+    promptEl.addEventListener("keydown", event => {
+      if(event.key === "Enter" && !event.shiftKey){
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
+
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const text = promptEl.value.trim();
+      if(!text) return;
+
+      promptEl.value = "";
+      autoResizePrompt();
+      sendBtn.disabled = true;
+
+      addMessage("user", text);
+      const prior = history.slice(-8);
+      history.push({role:"user", content:text});
+
+      const loading = addMessage("assistant", "Analyzing request and checking Oracle...");
+      fetchStatus.textContent = "Fetching Oracle data...";
+      fetchStatus.classList.add("show");
+      setProgress(fetchProgress, true);
+
+      try{
+        const data = await apiJson("/api/chat", {
+          method:"POST",
+          headers: authHeaders({"Content-Type":"application/json"}),
+          body:JSON.stringify({message:text, history:prior})
+        });
+
+        loading.remove();
+        addMessage("assistant", data.reply || "Done.");
+        history.push({role:"assistant", content:data.reply || ""});
+
+        if(Array.isArray(data.table)){
+          sortOrder = data.sortOrder || sortOrder;
+          destinationType = data.destinationType || destinationType || "";
+          destinationFilter.value = destinationType;
+
+          renderTable(data.table, {
+            page: data.page || 1,
+            pageSize: data.pageSize || 20,
+            totalPages: data.totalPages || 1,
+            overdueOpenCount: data.overdueOpenCount || data.table.length,
+            sortOrder,
+            destinationType
+          });
+        }
+      }catch(err){
+        loading.remove();
+        if(String(err.message).toLowerCase().includes("oracle session")){
+          showView("oracle");
+          setStatus("Reconnect Oracle");
+        }
+        addMessage("assistant", err.message || "I could not complete that request.");
+      }finally{
+        sendBtn.disabled = false;
+        setProgress(fetchProgress, false);
+        fetchStatus.classList.remove("show");
+        promptEl.focus();
+      }
+    });
+
+    clearBtn.addEventListener("click", () => {
+      latestRows = [];
+      currentPage = 1;
+      totalPages = 1;
+      destinationType = "";
+      destinationFilter.value = "";
+      tableArea.className = "empty";
+      tableArea.textContent = "The Oracle result table will appear here.";
+      summaryEl.textContent = "No Oracle result loaded yet.";
+    });
+
+    updateAuthMode("login");
+    boot();
+    autoResizePrompt();
+  </script>
+</body>
+</html>
