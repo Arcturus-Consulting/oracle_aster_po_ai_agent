@@ -1,6 +1,9 @@
 import os
 import smtplib
 from email.message import EmailMessage
+from urllib.parse import quote
+
+import requests
 
 
 MAIL_TEMPLATE = """Hello {supplier_name},
@@ -21,9 +24,8 @@ Regards,
 Procurement Team
 """
 
-def build_supplier_followup_email(row: dict) -> dict:
-    from urllib.parse import quote
 
+def build_supplier_followup_email(row: dict) -> dict:
     to_email = row.get("supplierEmail") or row.get("SupplierEmailAddress") or ""
     order_number = row.get("orderNumber") or "the purchase order"
 
@@ -49,6 +51,7 @@ def build_supplier_followup_email(row: dict) -> dict:
         "mailto": mailto,
     }
 
+
 def send_supplier_email(row: dict) -> dict:
     draft = build_supplier_followup_email(row)
 
@@ -59,6 +62,57 @@ def send_supplier_email(row: dict) -> dict:
             "draft": draft,
         }
 
+    provider = os.getenv("EMAIL_PROVIDER", "smtp").strip().lower()
+
+    if provider == "resend":
+        return _send_with_resend(draft)
+
+    return _send_with_smtp(draft)
+
+
+def _send_with_resend(draft: dict) -> dict:
+    api_key = os.getenv("RESEND_API_KEY", "").strip()
+    sender = os.getenv("RESEND_FROM", "").strip()
+
+    if not api_key or not sender:
+        return {
+            "sent": False,
+            "reason": "Resend is not configured. Add RESEND_API_KEY and RESEND_FROM.",
+            "draft": draft,
+        }
+
+    response = requests.post(
+        "https://api.resend.com/emails",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "from": sender,
+            "to": [draft["to"]],
+            "subject": draft["subject"],
+            "text": draft["body"],
+        },
+        timeout=30,
+    )
+
+    if response.status_code >= 400:
+        return {
+            "sent": False,
+            "reason": f"Resend email failed: {response.text[:500]}",
+            "draft": draft,
+        }
+
+    return {
+        "sent": True,
+        "provider": "resend",
+        "to": draft["to"],
+        "subject": draft["subject"],
+        "draft": draft,
+    }
+
+
+def _send_with_smtp(draft: dict) -> dict:
     smtp_host = os.getenv("SMTP_HOST", "").strip()
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USERNAME", "").strip()
@@ -87,6 +141,7 @@ def send_supplier_email(row: dict) -> dict:
 
     return {
         "sent": True,
+        "provider": "smtp",
         "to": draft["to"],
         "subject": draft["subject"],
         "draft": draft,
