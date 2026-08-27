@@ -7,7 +7,7 @@ import time
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
-
+import requests
 from dotenv import load_dotenv
 
 try:
@@ -86,8 +86,43 @@ def _otp_key(email: str) -> str:
 def _hash_otp(otp: str, salt: str) -> str:
     return hashlib.sha256(f"{salt}:{otp}".encode("utf-8")).hexdigest()
 
-
 def _send_otp_email(to_email: str, otp: str) -> None:
+    provider = os.getenv("EMAIL_PROVIDER", "smtp").strip().lower()
+
+    subject = "Your Oracle PO Chatbot verification code"
+    body = (
+        f"Your Oracle PO Chatbot verification code is: {otp}\n\n"
+        "This code expires in 1 minute.\n\n"
+        "If you did not request this, you can ignore this email."
+    )
+
+    if provider == "resend":
+        api_key = os.getenv("RESEND_API_KEY", "").strip()
+        sender = os.getenv("RESEND_FROM", "").strip()
+
+        if not api_key or not sender:
+            raise RuntimeError("Resend is not configured. Add RESEND_API_KEY and RESEND_FROM.")
+
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": sender,
+                "to": [to_email],
+                "subject": subject,
+                "text": body,
+            },
+            timeout=30,
+        )
+
+        if response.status_code >= 400:
+            raise RuntimeError(f"Resend email failed: {response.text[:500]}")
+
+        return
+
     smtp_host = os.getenv("SMTP_HOST", "").strip()
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USERNAME", "").strip()
@@ -101,15 +136,12 @@ def _send_otp_email(to_email: str, otp: str) -> None:
     message = EmailMessage()
     message["From"] = smtp_from
     message["To"] = to_email
-    message["Subject"] = "Your Oracle PO Chatbot verification code"
-    message.set_content(
-        f"Your Oracle PO Chatbot verification code is: {otp}\n\n"
-        "This code expires in 1 minute.\n\n"
-        "If you did not request this, you can ignore this email."
-    )
+    message["Subject"] = subject
+    message.set_content(body)
 
     with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
         if use_tls:
             server.starttls()
         server.login(smtp_user, smtp_password)
         server.send_message(message)
+
