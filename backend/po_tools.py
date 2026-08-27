@@ -1,7 +1,7 @@
 import os
-from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
-
+from collections import Counter
+from datetime import date, datetime, timedelta
 try:
     from .email_service import build_supplier_followup_email
 except ImportError:
@@ -111,6 +111,53 @@ def is_overdue_open_schedule(row: dict[str, Any], today: date | None = None) -> 
     due = due_date_from_row(row)
     return bool(due and due < today and is_open_status(row.get("ScheduleStatus")))
 
+def number_value(value: Any) -> float:
+    if value in (None, ""):
+        return 0.0
+    try:
+        return float(str(value).replace(",", "").strip())
+    except ValueError:
+        return 0.0
+
+
+def is_partially_received_schedule(row: dict[str, Any]) -> bool:
+    quantity = number_value(row.get("Quantity"))
+    received = number_value(row.get("ReceivedQuantity"))
+    return quantity > 0 and 0 < received < quantity
+
+
+def build_schedule_query(
+    *,
+    today: date,
+    supplier: str | None = None,
+    overdue: bool = True,
+    min_late_days: int | None = None,
+    due_window: str | None = None,
+) -> str:
+    bu = os.getenv("ORACLE_PROCUREMENT_BU", "US1 Business Unit")
+    parts = ["ScheduleStatus='Open'", f"ProcurementBU='{bu}'"]
+
+    if supplier:
+        clean_supplier = supplier.replace("'", "''").strip()
+        parts.append(f"Supplier='{clean_supplier}'")
+
+    due_window = (due_window or "").strip().lower()
+
+    if due_window == "today":
+        parts.append(f"RequestedDeliveryDate='{today.isoformat()}'")
+    elif due_window in {"near", "near_due", "next_3_days"}:
+        parts.append(f"RequestedDeliveryDate>='{today.isoformat()}'")
+        parts.append(f"RequestedDeliveryDate<='{(today + timedelta(days=3)).isoformat()}'")
+    elif due_window in {"week", "this_week", "due_this_week"}:
+        parts.append(f"RequestedDeliveryDate>='{today.isoformat()}'")
+        parts.append(f"RequestedDeliveryDate<='{(today + timedelta(days=7)).isoformat()}'")
+    elif min_late_days is not None:
+        cutoff = today - timedelta(days=int(min_late_days))
+        parts.append(f"RequestedDeliveryDate<'{cutoff.isoformat()}'")
+    elif overdue:
+        parts.append(f"RequestedDeliveryDate<'{today.isoformat()}'")
+
+    return ";".join(parts)
 
 def normalize_schedule_row(
     row: dict[str, Any],
@@ -271,17 +318,21 @@ def fetch_schedule_candidates(
 
     return []
 
-
-
-def get_overdue_open_po_schedules(
-    limit: int | None = None,
-    max_pages: int | None = None,
+def search_po_schedules(
+    *,
+    supplier: str | None = None,
+    overdue: bool = True,
+    min_late_days: int | None = None,
+    due_window: str | None = None,
+    min_amount: float | None = None,
+    partially_received: bool = False,
+    group_by_supplier: bool = False,
     page: int = 1,
     page_size: int = 20,
     sort_order: str = "desc",
-    destination_type: str = "",
+    limit: int | None = None,
+    max_pages: int | None = None,
     enrich_headers: bool = True,
-    enrich_nested_schedules: bool = True,
     oracle_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
@@ -297,22 +348,33 @@ def get_overdue_open_po_schedules(
     page = max(1, int(page or 1))
     page_size = max(1, min(100, int(page_size or 20)))
     sort_order = (sort_order or "desc").lower()
-    destination_type = (destination_type or "").strip().lower()
+
+    query = build_schedule_query(
+        today=today,
+        supplier=supplier,
+        overdue=overdue,
+        min_late_days=min_late_days,
+        due_window=due_window,
+    )
 
     page_key = cache_key(
-        "overdue-page",
+        "po-search",
         {
             "today": today.isoformat(),
-            "limit": limit,
-            "maxPages": max_pages,
+            "query": query,
+            "supplier": supplier or "",
+            "overdue": overdue,
+            "minLateDays": min_late_days,
+            "dueWindow": due_window or "",
+            "minAmount": min_amount,
+            "partiallyReceived": partially_received,
+            "groupBySupplier": group_by_supplier,
             "page": page,
             "pageSize": page_size,
             "sortOrder": sort_order,
-            "destinationType": destination_type,
-            "enrichHeaders": enrich_headers,
-            "enrichNestedSchedules": enrich_nested_schedules,
+            "limit": limit,
+            "maxPages": max_pages,
             "baseUrl": os.getenv("ORACLE_BASE_URL", ""),
-            "procurementBU": os.getenv("ORACLE_PROCUREMENT_BU", "US1 Business Unit"),
         },
     )
 
@@ -321,28 +383,87 @@ def get_overdue_open_po_schedules(
         cached_page["cache"] = {"hit": True, "key": page_key}
         return cached_page
 
-    candidates = fetch_schedule_candidates(client, limit=limit, max_pages=max_pages)
-    overdue = [row for row in candidates if is_overdue_open_schedule(row, today)]
+    params = {
+        "fields": SCHEDULE_FIELDS,
+        "onlyData": "true",
+        "totalResults": "true",
+        "q": query,
+    }
 
-    overdue.sort(
+    for order_by in ("RequestedDeliveryDate:desc", ""):
+        attempt = dict(params)
+        if order_by:
+            attempt["orderBy"] = order_by
+
+        try:
+            candidates = client.paginate(
+                "purchaseOrderSchedules",
+                params=attempt,
+                limit=limit,
+                max_pages=max_pages,
+            )
+            break
+        except RuntimeError as exc:
+            text = str(exc).lower()
+            if order_by and ("orderby" in text or "order by" in text or "not valid" in text):
+                continue
+            raise
+    else:
+        candidates = []
+
+    rows = list(candidates)
+
+    if overdue and not due_window and min_late_days is None:
+        rows = [row for row in rows if is_overdue_open_schedule(row, today)]
+
+    if min_amount is not None:
+        rows = [row for row in rows if number_value(row.get("Amount")) > float(min_amount)]
+
+    if partially_received:
+        rows = [row for row in rows if is_partially_received_schedule(row)]
+
+    rows.sort(
         key=lambda row: due_date_from_row(row) or date.min,
         reverse=(sort_order == "desc"),
     )
 
-    total_overdue = len(overdue)
-    total_pages = max(1, (total_overdue + page_size - 1) // page_size)
+    if group_by_supplier:
+        counts = Counter(row.get("Supplier") or "Unknown" for row in rows)
+        grouped_rows = [
+            {
+                "supplier": supplier_name,
+                "overdueSchedules": count,
+            }
+            for supplier_name, count in counts.most_common()
+        ]
+
+        result = {
+            "today": today.isoformat(),
+            "mode": "supplier_summary",
+            "candidateCount": len(candidates),
+            "resultCount": len(grouped_rows),
+            "rows": grouped_rows,
+            "page": 1,
+            "pageSize": len(grouped_rows),
+            "totalPages": 1,
+            "cache": {"hit": False, "key": page_key},
+        }
+        cache_set_json(page_key, result, ttl_seconds("PAGE_CACHE_TTL_SECONDS", 300))
+        return result
+
+    total_count = len(rows)
+    total_pages = max(1, (total_count + page_size - 1) // page_size)
     page = min(page, total_pages)
 
     start = (page - 1) * page_size
     end = start + page_size
-    visible_rows = overdue[start:end]
+    visible_rows = rows[start:end]
 
     headers_by_id: dict[Any, dict[str, Any]] = {}
     normalized_rows = []
 
     for row in visible_rows:
         header = {}
-        nested_schedule = {}
         po_header_id = row.get("POHeaderId")
 
         if enrich_headers and po_header_id:
@@ -350,35 +471,56 @@ def get_overdue_open_po_schedules(
                 headers_by_id[po_header_id] = fetch_purchase_order_header(client, po_header_id)
             header = headers_by_id[po_header_id]
 
-        if enrich_nested_schedules:
-            try:
-                nested_schedule = fetch_nested_schedule_detail(client, row)
-            except Exception as exc:
-                nested_schedule = {"_error": str(exc)}
-
-        normalized_rows.append(
-            normalize_schedule_row(row, today=today, header=header, nested_schedule=nested_schedule)
-        )
-
-    if destination_type:
-        normalized_rows = [
-            row
-            for row in normalized_rows
-            if str(row.get("destinationType") or "").strip().lower() == destination_type
-        ]
+        normalized = normalize_schedule_row(row, today=today, header=header, nested_schedule={})
+        normalized["amount"] = number_value(row.get("Amount"))
+        normalized["pendingQuantity"] = number_value(row.get("Quantity")) - number_value(row.get("ReceivedQuantity"))
+        normalized["partiallyReceived"] = is_partially_received_schedule(row)
+        normalized_rows.append(normalized)
 
     result = {
         "today": today.isoformat(),
+        "mode": "schedule_table",
         "candidateCount": len(candidates),
-        "overdueOpenCount": total_overdue,
+        "resultCount": total_count,
+        "overdueOpenCount": total_count,
         "page": page,
         "pageSize": page_size,
         "totalPages": total_pages,
         "sortOrder": sort_order,
-        "destinationType": destination_type,
+        "filters": {
+            "supplier": supplier,
+            "overdue": overdue,
+            "minLateDays": min_late_days,
+            "dueWindow": due_window,
+            "minAmount": min_amount,
+            "partiallyReceived": partially_received,
+            "groupBySupplier": group_by_supplier,
+        },
         "rows": normalized_rows,
         "cache": {"hit": False, "key": page_key},
     }
 
     cache_set_json(page_key, result, ttl_seconds("PAGE_CACHE_TTL_SECONDS", 300))
     return result
+
+def get_overdue_open_po_schedules(
+    limit: int | None = None,
+    max_pages: int | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    sort_order: str = "desc",
+    destination_type: str = "",
+    enrich_headers: bool = True,
+    enrich_nested_schedules: bool = False,
+    oracle_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return search_po_schedules(
+        overdue=True,
+        page=page,
+        page_size=page_size,
+        sort_order=sort_order,
+        limit=limit,
+        max_pages=max_pages,
+        enrich_headers=enrich_headers,
+        oracle_config=oracle_config,
+    )

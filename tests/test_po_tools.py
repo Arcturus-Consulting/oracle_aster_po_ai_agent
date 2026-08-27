@@ -1,8 +1,14 @@
 from datetime import date
 
 from backend.email_service import build_supplier_followup_email
-from backend.po_tools import is_overdue_open_schedule, normalize_schedule_row, parse_oracle_date
-
+from backend.po_tools import (
+    build_schedule_query,
+    is_overdue_open_schedule,
+    is_partially_received_schedule,
+    normalize_schedule_row,
+    number_value,
+    parse_oracle_date,
+)
 
 def test_parse_oracle_date_common_formats():
     assert parse_oracle_date("2026-08-20") == date(2026, 8, 20)
@@ -52,3 +58,35 @@ def test_email_draft_handles_missing_email():
     assert draft["to"] == ""
     assert draft["mailto"] == ""
     assert "US165362" in draft["subject"]
+
+
+def test_number_value_handles_oracle_amounts():
+    assert number_value("10,000.50") == 10000.50
+    assert number_value(None) == 0.0
+    assert number_value("bad") == 0.0
+
+
+def test_partially_received_logic():
+    assert is_partially_received_schedule({"Quantity": 10, "ReceivedQuantity": 4}) is True
+    assert is_partially_received_schedule({"Quantity": 10, "ReceivedQuantity": 0}) is False
+    assert is_partially_received_schedule({"Quantity": 10, "ReceivedQuantity": 10}) is False
+
+
+def test_build_schedule_query_for_supplier_and_late_days():
+    query = build_schedule_query(
+        today=date(2026, 8, 27),
+        supplier="Amazon",
+        min_late_days=30,
+    )
+
+    assert "ScheduleStatus='Open'" in query
+    assert "ProcurementBU='US1 Business Unit'" in query
+    assert "Supplier='Amazon'" in query
+    assert "RequestedDeliveryDate<'2026-07-28'" in query
+
+
+def test_build_schedule_query_for_due_this_week():
+    query = build_schedule_query(today=date(2026, 8, 27), overdue=False, due_window="this_week")
+
+    assert "RequestedDeliveryDate>='2026-08-27'" in query
+    assert "RequestedDeliveryDate<='2026-09-03'" in query

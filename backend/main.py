@@ -20,7 +20,7 @@ try:
     from .oracle_client import OracleClient, oracle_status
     from .oracle_session import clear_oracle_session, get_oracle_session, has_oracle_session, save_oracle_session
     from .otp_service import request_signup_otp, verify_signup_otp
-    from .po_tools import get_overdue_open_po_schedules
+    from .po_tools import get_overdue_open_po_schedules, search_po_schedules
 except ImportError:
     from agent import run_chat
     from cache_service import cache_status
@@ -34,7 +34,7 @@ except ImportError:
     from oracle_client import OracleClient, oracle_status
     from oracle_session import clear_oracle_session, get_oracle_session, has_oracle_session, save_oracle_session
     from otp_service import request_signup_otp, verify_signup_otp
-    from po_tools import get_overdue_open_po_schedules
+    from po_tools import get_overdue_open_po_schedules, search_po_schedules
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -61,10 +61,10 @@ class ChatRequest(BaseModel):
     message: str
     history: list[ChatMessage] = Field(default_factory=list)
 
-
 class EmailRequest(BaseModel):
     row: dict[str, Any]
-
+    subject: str | None = None
+    body: str | None = None
 
 class EmailPasswordRequest(BaseModel):
     email: str
@@ -221,11 +221,13 @@ async def chat(req: ChatRequest, oracle_config: dict[str, Any] = Depends(require
 @app.post("/api/send-mail")
 def send_mail(req: EmailRequest, _: dict[str, Any] = Depends(require_firebase_user)):
     try:
-        return {"success": True, **send_supplier_email(req.row)}
+        return {
+            "success": True,
+            **send_supplier_email(req.row, subject=req.subject, body=req.body),
+        }
     except Exception as exc:
         logger.exception("Email send failed")
         raise HTTPException(500, str(exc))
-
 
 @app.get("/api/overdue-schedules")
 def overdue_schedules(
@@ -250,6 +252,39 @@ def overdue_schedules(
         logger.exception("Overdue schedule page failed")
         raise HTTPException(500, str(exc))
 
+@app.get("/api/po-schedules/search")
+def po_schedule_search(
+    page: int = 1,
+    page_size: int = 20,
+    sort_order: str = "desc",
+    supplier: str = "",
+    min_late_days: int | None = None,
+    due_window: str = "",
+    min_amount: float | None = None,
+    partially_received: bool = False,
+    group_by_supplier: bool = False,
+    oracle_config: dict[str, Any] = Depends(require_oracle_config),
+):
+    try:
+        return {
+            "success": True,
+            **search_po_schedules(
+                supplier=supplier or None,
+                overdue=False if due_window else True,
+                min_late_days=min_late_days,
+                due_window=due_window or None,
+                min_amount=min_amount,
+                partially_received=partially_received,
+                group_by_supplier=group_by_supplier,
+                page=page,
+                page_size=page_size,
+                sort_order=sort_order,
+                oracle_config=oracle_config,
+            ),
+        }
+    except Exception as exc:
+        logger.exception("PO schedule search failed")
+        raise HTTPException(500, str(exc))
 
 if __name__ == "__main__":
     import os

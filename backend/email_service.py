@@ -52,8 +52,14 @@ def build_supplier_followup_email(row: dict) -> dict:
     }
 
 
-def send_supplier_email(row: dict) -> dict:
+def send_supplier_email(row: dict, subject: str | None = None, body: str | None = None) -> dict:
     draft = build_supplier_followup_email(row)
+
+    if subject:
+        draft["subject"] = subject.strip()
+
+    if body:
+        draft["body"] = body.strip()
 
     if not draft["to"]:
         return {

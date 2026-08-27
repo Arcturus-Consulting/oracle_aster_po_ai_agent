@@ -98,6 +98,16 @@
     .pager button{background:white;color:#263331;min-height:34px}
     .pager button.active{background:#263331;color:white}
     .no-mail{color:#66716e;font-size:12px;white-space:nowrap}
+    .filters{display:grid;grid-template-columns:170px 140px 140px 150px auto auto;gap:8px;align-items:center}
+.filters input,.filters select{min-height:40px;padding:0 10px}
+.check{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:700;white-space:nowrap}
+.check input{width:auto}
+.summary-table td:first-child{font-weight:750;color:#006c8f}
+.modal-backdrop{display:none;position:fixed;inset:0;background:rgba(15,20,18,.42);z-index:20;align-items:center;justify-content:center;padding:20px}
+.modal-backdrop.show{display:flex}
+.modal{width:min(720px,100%);background:white;border:1px solid var(--line);border-radius:8px;padding:22px;box-shadow:0 20px 70px rgba(0,0,0,.22)}
+.modal textarea{min-height:220px;border:1px solid #aab4b0;resize:vertical;padding:10px}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
     @media(max-width:900px){
       main{grid-template-columns:1fr;height:auto;overflow:auto}
       .chat{height:460px;border-right:0;border-bottom:1px solid var(--line)}
@@ -199,14 +209,21 @@
           <h2>Overdue Open Schedules</h2>
           <div class="summary" id="summary">No Oracle result loaded yet.</div>
         </div>
-        <div class="toolbar">
-          <select id="destinationFilter">
-            <option value="">All destination types</option>
-            <option value="expense">Expense</option>
-            <option value="inventory">Inventory</option>
-          </select>
-          <button class="secondary" id="clear" type="button">Clear</button>
-        </div>
+        <div class="toolbar filters">
+  <input id="supplierFilter" placeholder="Supplier">
+  <input id="minAmountFilter" type="number" min="0" placeholder="Amount >">
+  <input id="minLateDaysFilter" type="number" min="0" placeholder="Late days >">
+  <select id="dueWindowFilter">
+    <option value="">Overdue</option>
+    <option value="today">Due today</option>
+    <option value="near_due">Near due</option>
+    <option value="this_week">Due this week</option>
+  </select>
+  <label class="check"><input id="partialReceivedFilter" type="checkbox"> Partial</label>
+  <button class="secondary" id="supplierSummaryBtn" type="button">Top Suppliers</button>
+  <button id="applyFilters" type="button">Apply</button>
+  <button class="secondary" id="clear" type="button">Clear</button>
+</div>
       </div>
 
       <div class="fetch-status" id="fetchStatus">Fetching Oracle data...</div>
@@ -214,6 +231,23 @@
       <div id="tableArea" class="empty">The Oracle result table will appear here.</div>
     </section>
   </main>
+<div class="modal-backdrop" id="mailModal">
+  <div class="modal">
+    <h2>Edit Supplier Email</h2>
+    <p class="sub" id="mailToLabel"></p>
+
+    <label for="mailSubject">Subject</label>
+    <input id="mailSubject">
+
+    <label for="mailBody">Body</label>
+    <textarea id="mailBody"></textarea>
+
+    <div class="modal-actions">
+      <button class="secondary" id="cancelMail" type="button">Cancel</button>
+      <button id="confirmMail" type="button">Send Mail</button>
+    </div>
+  </div>
+</div>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
@@ -265,7 +299,20 @@
     const statusEl = document.getElementById("status");
     const dotEl = document.getElementById("dot");
     const clearBtn = document.getElementById("clear");
-    const destinationFilter = document.getElementById("destinationFilter");
+    const supplierFilter = document.getElementById("supplierFilter");
+const minAmountFilter = document.getElementById("minAmountFilter");
+const minLateDaysFilter = document.getElementById("minLateDaysFilter");
+const dueWindowFilter = document.getElementById("dueWindowFilter");
+const partialReceivedFilter = document.getElementById("partialReceivedFilter");
+const supplierSummaryBtn = document.getElementById("supplierSummaryBtn");
+const applyFilters = document.getElementById("applyFilters");
+
+const mailModal = document.getElementById("mailModal");
+const mailToLabel = document.getElementById("mailToLabel");
+const mailSubject = document.getElementById("mailSubject");
+const mailBody = document.getElementById("mailBody");
+const cancelMail = document.getElementById("cancelMail");
+const confirmMail = document.getElementById("confirmMail");
     const fetchProgress = document.getElementById("fetchProgress");
     const fetchStatus = document.getElementById("fetchStatus");
 
@@ -275,7 +322,15 @@
     let totalPages = 1;
     let pageSize = 20;
     let sortOrder = "desc";
-    let destinationType = "";
+    let activeSearch = {
+  supplier: "",
+  min_amount: "",
+  min_late_days: "",
+  due_window: "",
+  partially_received: false,
+  group_by_supplier: false
+};
+let mailRow = null;
     let authMode = "login";
     let signupOtpRequested = false;
     let appToken = sessionStorage.getItem("firebaseIdToken") || "";
@@ -536,17 +591,61 @@
       showView("auth");
     });
 
+    function formatMoney(value){
+  if(value === null || value === undefined || value === "") return "-";
+  const num = Number(value);
+  if(Number.isNaN(num)) return escapeHtml(value);
+  return num.toLocaleString(undefined, {maximumFractionDigits: 2});
+}
+
+function readFilterState(groupBySupplier=false){
+  activeSearch = {
+    supplier: supplierFilter.value.trim(),
+    min_amount: minAmountFilter.value.trim(),
+    min_late_days: minLateDaysFilter.value.trim(),
+    due_window: dueWindowFilter.value,
+    partially_received: partialReceivedFilter.checked,
+    group_by_supplier: groupBySupplier
+  };
+}
+function renderSupplierSummary(rows, meta){
+  latestRows = rows || [];
+  tableArea.className = "table-wrap";
+  summaryEl.textContent = `${latestRows.length} supplier(s) returned.`;
+
+  tableArea.innerHTML = `
+    <table class="summary-table">
+      <thead>
+        <tr>
+          <th>Supplier</th>
+          <th>Overdue Schedules</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${latestRows.map(row => `
+          <tr>
+            <td>${escapeHtml(row.supplier || "-")}</td>
+            <td>${escapeHtml(row.overdueSchedules ?? "-")}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
     function renderTable(rows, meta){
+      if(meta?.mode === "supplier_summary"){
+  renderSupplierSummary(rows, meta);
+  return;
+}
       latestRows = rows || [];
 
       if(meta){
-        currentPage = meta.page || 1;
-        totalPages = meta.totalPages || 1;
-        pageSize = meta.pageSize || 20;
-        sortOrder = meta.sortOrder || sortOrder;
-        destinationType = meta.destinationType || destinationType || "";
-        destinationFilter.value = destinationType;
-      }
+  currentPage = meta.page || 1;
+  totalPages = meta.totalPages || 1;
+  pageSize = meta.pageSize || 20;
+  sortOrder = meta.sortOrder || sortOrder;
+}
 
       if(!latestRows.length){
         tableArea.className = "empty";
@@ -556,38 +655,39 @@
       }
 
       tableArea.className = "table-wrap";
-      summaryEl.textContent = `${meta?.overdueOpenCount ?? latestRows.length} overdue open schedule(s). Showing page ${currentPage} of ${totalPages}.`;
-
+summaryEl.textContent = `${meta?.resultCount ?? meta?.overdueOpenCount ?? latestRows.length} matching schedule(s). Showing page ${currentPage} of ${totalPages}.`;
       tableArea.innerHTML = `
         <table>
           <thead>
             <tr>
               <th>Order</th>
-              <th>Destination Type</th>
-              <th>Due Date <button class="sort-btn" type="button" data-sort-due title="Sort due date">${sortOrder === "asc" ? "↑" : "↓"}</button></th>
-              <th>Late</th>
-              <th>Status</th>
-              <th>Supplier</th>
-              <th>Description</th>
-              <th>Mail</th>
+<th>Due Date <button class="sort-btn" type="button" data-sort-due title="Sort due date">${sortOrder === "asc" ? "↑" : "↓"}</button></th>
+<th>Late</th>
+<th>Status</th>
+<th>Supplier</th>
+<th>Amount</th>
+<th>Qty</th>
+<th>Description</th>
+<th>Mail</th>
             </tr>
           </thead>
           <tbody>
             ${latestRows.map((row, index) => `
               <tr>
                 <td><a class="order" href="${oracleOrderUrl(row)}" target="_blank" rel="noopener">${escapeHtml(row.orderNumber || "")}</a></td>
-                <td>${escapeHtml(row.destinationType || "-")}</td>
-                <td>${escapeHtml(row.dueDate || "-")}</td>
-                <td class="late">${escapeHtml(row.lateDays ?? "-")} day(s)</td>
-                <td><span class="pill">${escapeHtml(row.status || "-")}</span></td>
-                <td>${escapeHtml(row.supplier || "-")}<br><small>${escapeHtml(row.supplierEmail || "")}</small></td>
-                <td>${escapeHtml(row.description || "-")}</td>
-                <td>
-                  ${row.mailAvailable
-                    ? `<button class="mail" type="button" data-index="${index}">Mail</button>`
-                    : `<span class="no-mail">No mail available</span>`
-                  }
-                </td>
+<td>${escapeHtml(row.dueDate || "-")}</td>
+<td class="late">${escapeHtml(row.lateDays ?? "-")} day(s)</td>
+<td><span class="pill">${escapeHtml(row.status || "-")}</span></td>
+<td>${escapeHtml(row.supplier || "-")}<br><small>${escapeHtml(row.supplierEmail || "")}</small></td>
+<td>${formatMoney(row.amount)}</td>
+<td>${escapeHtml(row.receivedQuantity ?? 0)} / ${escapeHtml(row.quantity ?? "-")}</td>
+<td>${escapeHtml(row.description || "-")}</td>
+<td>
+  ${row.mailAvailable
+    ? `<button class="mail" type="button" data-index="${index}">Mail</button>`
+    : `<span class="no-mail">No mail available</span>`
+  }
+</td>
               </tr>
             `).join("")}
           </tbody>
@@ -616,51 +716,84 @@
     }
 
     async function loadPage(page){
-      fetchStatus.textContent = `Fetching page ${page} from Oracle or cache...`;
-      fetchStatus.classList.add("show");
-      setProgress(fetchProgress, true);
+  fetchStatus.textContent = `Fetching page ${page} from Oracle or cache...`;
+  fetchStatus.classList.add("show");
+  setProgress(fetchProgress, true);
 
-      try{
-        const params = new URLSearchParams({
-          page: String(page),
-          page_size: String(pageSize),
-          sort_order: sortOrder,
-          destination_type: destinationType
-        });
+  try{
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(pageSize),
+      sort_order: sortOrder,
+      supplier: activeSearch.supplier,
+      due_window: activeSearch.due_window,
+      partially_received: String(activeSearch.partially_received),
+      group_by_supplier: String(activeSearch.group_by_supplier)
+    });
 
-        const data = await apiJson(`/api/overdue-schedules?${params.toString()}`, {
-          headers: authHeaders()
-        });
+    if(activeSearch.min_amount) params.set("min_amount", activeSearch.min_amount);
+    if(activeSearch.min_late_days) params.set("min_late_days", activeSearch.min_late_days);
 
-        renderTable(data.rows || [], data);
-      }catch(err){
-        if(String(err.message).toLowerCase().includes("oracle session")){
-          showView("oracle");
-          setStatus("Reconnect Oracle");
-        }
-        addMessage("assistant", err.message || "Could not load that page.");
-      }finally{
-        setProgress(fetchProgress, false);
-        fetchStatus.classList.remove("show");
-      }
+    const data = await apiJson(`/api/po-schedules/search?${params.toString()}`, {
+      headers: authHeaders()
+    });
+
+    renderTable(data.rows || [], data);
+  }catch(err){
+    if(String(err.message).toLowerCase().includes("oracle session")){
+      showView("oracle");
+      setStatus("Reconnect Oracle");
     }
+    addMessage("assistant", err.message || "Could not load that page.");
+  }finally{
+    setProgress(fetchProgress, false);
+    fetchStatus.classList.remove("show");
+  }
+}
 
-    async function sendMail(row){
-      const data = await apiJson("/api/send-mail", {
-        method:"POST",
-        headers: authHeaders({"Content-Type":"application/json"}),
-        body:JSON.stringify({row})
-      });
+    function openMailModal(row){
+  mailRow = row;
+  const draft = row.emailDraft || {};
+  mailToLabel.textContent = `To: ${draft.to || row.supplierEmail || ""}`;
+  mailSubject.value = draft.subject || `Follow-up on overdue purchase order ${row.orderNumber || ""}`;
+  mailBody.value = draft.body || "";
+  mailModal.classList.add("show");
+}
 
-      if(data.sent){
-        addMessage("assistant", `Mail sent to ${data.to || data.draft.to}.`);
-      }else if(data.draft && data.draft.mailto){
-        addMessage("assistant", data.reason || "SMTP is not configured. Opening the draft in your mail app.");
-        window.location.href = data.draft.mailto;
-      }else{
-        addMessage("assistant", data.reason || "Mail could not be sent.");
-      }
-    }
+function closeMailModal(){
+  mailModal.classList.remove("show");
+  mailRow = null;
+}
+
+async function sendMail(row, subject, body){
+  const data = await apiJson("/api/send-mail", {
+    method:"POST",
+    headers: authHeaders({"Content-Type":"application/json"}),
+    body:JSON.stringify({row, subject, body})
+  });
+
+  if(data.sent){
+    addMessage("assistant", `Mail sent to ${data.to || data.draft.to} using ${data.provider || "email provider"}.`);
+  }else{
+    addMessage("assistant", data.reason || "Mail could not be sent.");
+  }
+}
+
+cancelMail.addEventListener("click", closeMailModal);
+
+confirmMail.addEventListener("click", async () => {
+  if(!mailRow) return;
+  confirmMail.disabled = true;
+
+  try{
+    await sendMail(mailRow, mailSubject.value, mailBody.value);
+    closeMailModal();
+  }catch(err){
+    addMessage("assistant", err.message || "Mail could not be sent.");
+  }finally{
+    confirmMail.disabled = false;
+  }
+});
 
     tableArea.addEventListener("click", async event => {
       const sortButton = event.target.closest("[data-sort-due]");
@@ -681,14 +814,19 @@
       const mailButton = event.target.closest("button.mail");
       if(mailButton){
         const row = latestRows[Number(mailButton.dataset.index)];
-        if(row) sendMail(row).catch(err => addMessage("assistant", err.message));
+        if(row) openMailModal(row);
       }
     });
 
-    destinationFilter.addEventListener("change", async () => {
-      destinationType = destinationFilter.value;
-      await loadPage(1);
-    });
+    applyFilters.addEventListener("click", async () => {
+  readFilterState(false);
+  await loadPage(1);
+});
+
+supplierSummaryBtn.addEventListener("click", async () => {
+  readFilterState(true);
+  await loadPage(1);
+});
 
     function autoResizePrompt(){
       promptEl.style.height = "auto";
@@ -734,19 +872,18 @@
         history.push({role:"assistant", content:data.reply || ""});
 
         if(Array.isArray(data.table)){
-          sortOrder = data.sortOrder || sortOrder;
-          destinationType = data.destinationType || destinationType || "";
-          destinationFilter.value = destinationType;
+  sortOrder = data.sortOrder || sortOrder;
 
-          renderTable(data.table, {
-            page: data.page || 1,
-            pageSize: data.pageSize || 20,
-            totalPages: data.totalPages || 1,
-            overdueOpenCount: data.overdueOpenCount || data.table.length,
-            sortOrder,
-            destinationType
-          });
-        }
+  renderTable(data.table, {
+    mode: data.mode || "schedule_table",
+    page: data.page || 1,
+    pageSize: data.pageSize || 20,
+    totalPages: data.totalPages || 1,
+    overdueOpenCount: data.overdueOpenCount || data.table.length,
+    resultCount: data.resultCount || data.overdueOpenCount || data.table.length,
+    sortOrder
+  });
+}
       }catch(err){
         loading.remove();
         if(String(err.message).toLowerCase().includes("oracle session")){
@@ -763,15 +900,28 @@
     });
 
     clearBtn.addEventListener("click", () => {
-      latestRows = [];
-      currentPage = 1;
-      totalPages = 1;
-      destinationType = "";
-      destinationFilter.value = "";
-      tableArea.className = "empty";
-      tableArea.textContent = "The Oracle result table will appear here.";
-      summaryEl.textContent = "No Oracle result loaded yet.";
-    });
+  latestRows = [];
+  currentPage = 1;
+  totalPages = 1;
+  activeSearch = {
+    supplier: "",
+    min_amount: "",
+    min_late_days: "",
+    due_window: "",
+    partially_received: false,
+    group_by_supplier: false
+  };
+
+  supplierFilter.value = "";
+  minAmountFilter.value = "";
+  minLateDaysFilter.value = "";
+  dueWindowFilter.value = "";
+  partialReceivedFilter.checked = false;
+
+  tableArea.className = "empty";
+  tableArea.textContent = "The Oracle result table will appear here.";
+  summaryEl.textContent = "No Oracle result loaded yet.";
+});
 
     updateAuthMode("login");
     boot();
